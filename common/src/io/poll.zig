@@ -1721,16 +1721,6 @@ pub fn Poll(comptime io_options: IoOptions) type {
             return tio.vtable.dirCreateDirPathOpen(tio.userdata, dir, sub_path, perm, options);
         }
 
-        fn fileWriteStreaming(userdata: ?*anyopaque, file: Io.File, header: []const u8, data: []const []const u8, splat: usize) Io.File.Writer.Error!usize {
-            const p: *ThisPoll = @ptrCast(@alignCast(userdata));
-            try checkCancel(p);
-
-            var t: Io.Threaded = .init_single_threaded;
-            const tio = t.io();
-
-            return tio.vtable.fileWriteStreaming(tio.userdata, file, header, data, splat);
-        }
-
         fn fileWritePositional(userdata: ?*anyopaque, file: Io.File, header: []const u8, data: []const []const u8, splat: usize, offset: u64) Io.File.WritePositionalError!usize {
             const p: *ThisPoll = @ptrCast(@alignCast(userdata));
             try checkCancel(p);
@@ -1791,14 +1781,16 @@ pub fn Poll(comptime io_options: IoOptions) type {
             return tio.vtable.fileReadPositional(tio.userdata, file, data, offset);
         }
 
-        fn fileReadStreaming(userdata: ?*anyopaque, file: Io.File, data: []const []u8) Io.File.Reader.Error!usize {
+        fn operate(userdata: ?*anyopaque, operation: Io.Operation) Io.Cancelable!Io.Operation.Result {
+            // TODO: implement network operations once they're migrated to this API.
+
             const p: *ThisPoll = @ptrCast(@alignCast(userdata));
             try checkCancel(p);
 
             var t: Io.Threaded = .init_single_threaded;
             const tio = t.io();
 
-            return tio.vtable.fileReadStreaming(tio.userdata, file, data);
+            return tio.vtable.operate(tio.userdata, operation);
         }
 
         fn socketClose(socket: posix.socket_t) void {
