@@ -14,6 +14,7 @@ pub const SkillPatchDataBundleList = @import("Tables/SkillPatchDataBundleList.zi
 pub const WeaponBasicData = @import("Tables/WeaponBasicData.zig");
 pub const CharWpnRecommendData = @import("Tables/CharWpnRecommendData.zig");
 pub const DomainData = @import("Tables/DomainData.zig");
+pub const MapPointData = @import("Tables/MapPointData.zig");
 
 pub const StrToNum = struct {
     pub const file = "StrIdNumTable.json";
@@ -32,6 +33,7 @@ str_to_num: StringArrayHashMap(StrToNum),
 num_to_str: StringArrayHashMap(NumToStr),
 char_wpn_recommend: StringArrayHashMap(CharWpnRecommendData),
 domain_data: StringArrayHashMap(DomainData),
+track_map_point: StringArrayHashMap(MapPointData),
 
 pub const LoadError = error{
     NotStarted,
