@@ -33,6 +33,8 @@ Currently supported client version is `1.0.14`, you can get it from 3rd party so
 
 Next, you have to apply the necessary [client patch](https://git.xeondev.com/LR/C). It allows you to connect to the local server.
 
+Once the patched game is running, you'll see a debug login window with a bunch of random characters. You should replace these with some numeric UID (digits only). After that, you can login normally.
+
 ## Community
 - [Our Discord Server](https://discord.xeondev.com)
 - [Our Telegram Channel](https://t.me/reversedrooms)
