@@ -7,6 +7,7 @@ pub const CharacterSkillMap = @import("Assets/CharacterSkillMap.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
+const StringHashMap = std.StringArrayHashMapUnmanaged;
 
 const meta = std.meta;
 const log = std.log.scoped(.assets);
@@ -17,7 +18,11 @@ char_skill_map: CharacterSkillMap,
 str_to_num_dicts: IndexDictionaries.StrToNum,
 num_to_str_dicts: IndexDictionaries.NumToStr,
 common_skill_config: configs.CommonSkillConfig,
-level_config_table: std.StringArrayHashMapUnmanaged(configs.LevelConfig),
+level_config_table: StringHashMap(configs.LevelConfig),
+// Map mark groups as they're stored in LevelMapMark.json
+level_map_mark_groups: StringHashMap([]const configs.ClientSingleMapMarkData),
+// instId-to-data mapping
+map_mark_table: StringHashMap(*const configs.ClientSingleMapMarkData),
 
 pub const IdGroup = enum {
     char_id,
@@ -63,12 +68,21 @@ pub fn load(io: Io, gpa: Allocator) !Assets {
         configs.CommonSkillConfig.file,
     );
 
-    const level_config_table = try configs.loadJsonConfig(
+    const level_config_table = (try configs.loadJsonConfig(
         std.json.ArrayHashMap(configs.LevelConfig),
         io,
         arena.allocator(),
         "LevelConfigTable.json",
-    );
+    )).map;
+
+    const level_map_mark_groups = (try configs.loadJsonConfig(
+        std.json.ArrayHashMap([]const configs.ClientSingleMapMarkData),
+        io,
+        arena.allocator(),
+        "LevelMapMark.json",
+    )).map;
+
+    const map_mark_table = try buildMapMarkTable(&level_map_mark_groups, arena.allocator());
 
     return .{
         .arena = arena,
@@ -77,8 +91,28 @@ pub fn load(io: Io, gpa: Allocator) !Assets {
         .str_to_num_dicts = str_to_num_dicts,
         .num_to_str_dicts = num_to_str_dicts,
         .common_skill_config = common_skill_config,
-        .level_config_table = level_config_table.map,
+        .level_config_table = level_config_table,
+        .level_map_mark_groups = level_map_mark_groups,
+        .map_mark_table = map_mark_table,
     };
+}
+
+fn buildMapMarkTable(
+    groups: *const StringHashMap([]const configs.ClientSingleMapMarkData),
+    arena: Allocator,
+) Allocator.Error!StringHashMap(*const configs.ClientSingleMapMarkData) {
+    var map: StringHashMap(*const configs.ClientSingleMapMarkData) = .empty;
+
+    for (groups.values()) |group| for (group) |*mark| {
+        const inst_id = try std.mem.concat(
+            arena,
+            u8,
+            &.{ mark.basicData.templateId, mark.basicData.markInstId },
+        );
+        try map.put(arena, inst_id, mark);
+    };
+
+    return map;
 }
 
 pub fn deinit(assets: *Assets) void {

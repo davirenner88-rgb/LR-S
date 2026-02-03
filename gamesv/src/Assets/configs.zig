@@ -3,6 +3,7 @@ const json = std.json;
 
 pub const CommonSkillConfig = @import("configs/CommonSkillConfig.zig");
 pub const LevelConfig = @import("configs/LevelConfig.zig");
+pub const ClientSingleMapMarkData = @import("configs/ClientSingleMapMarkData.zig");
 
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
