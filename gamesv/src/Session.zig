@@ -123,7 +123,7 @@ pub fn process(
                 .{ stream.socket.address, result.uid.view() },
             );
 
-            world = logic.World.init(&session, assets, result.uid, player, gpa, io);
+            world = logic.World.init(&session, assets, result.uid, player, io);
             receive_timeout = subsequent_request_timeout;
 
             logic.systems.triggerEvent(.{ .login = .{} }, &world.?, gpa) catch |err| switch (err) {

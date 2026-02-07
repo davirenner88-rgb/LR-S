@@ -4,6 +4,7 @@ const logic = @import("../../logic.zig");
 const Session = @import("../../Session.zig");
 const Assets = @import("../../Assets.zig");
 
+const Level = logic.Level;
 const Player = logic.Player;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
@@ -13,16 +14,75 @@ pub fn enterSceneOnLogin(
     tx: logic.event.Sender(.change_scene_begin),
 ) !void {
     _ = rx;
+
     try tx.send(.{});
+}
+
+fn respawnCharTeam(
+    gpa: Allocator,
+    char_bag: *const Player.CharBag,
+    cur_scene: *const Player.Scene.Current,
+    level: *Level,
+) Level.SpawnError!void {
+    // Despawn previous team
+    var team = level.team();
+    var char_net_id = team.next();
+    while (char_net_id != .none) : (char_net_id = team.next()) {
+        const handle = level.getObjectByNetId(char_net_id).?;
+        level.despawn(handle);
+    }
+
+    // Spawn new team
+    const position: Level.Object.Vector = .{
+        .x = cur_scene.position[0],
+        .y = cur_scene.position[1],
+        .z = cur_scene.position[2],
+    };
+
+    const rotation: Level.Object.Vector = .{
+        .x = cur_scene.rotation[0],
+        .y = cur_scene.rotation[1],
+        .z = cur_scene.rotation[2],
+    };
+
+    const team_index = char_bag.meta.curr_team_index;
+    const chars = char_bag.chars.slice();
+
+    for (char_bag.teams.items(.char_team)[team_index]) |slot| {
+        const char_index = slot.charIndex() orelse continue;
+        const i = @intFromEnum(char_index);
+
+        const char_template_id_num = chars.items(.template_id)[i];
+
+        _ = try level.spawn(
+            gpa,
+            .{
+                .template_id = char_template_id_num,
+                .position = position,
+                .rotation = rotation,
+                .hp = chars.items(.hp)[i],
+            },
+            .{ .character = .{
+                .level = chars.items(.level)[i],
+                .char_index = char_index,
+            } },
+        );
+    }
 }
 
 pub fn beginChangingScene(
     rx: logic.event.Receiver(.change_scene_begin),
+    gpa: logic.Resource.Allocator(.gpa),
     session: *Session,
     base: Player.Component(.base),
     scene: Player.Component(.scene),
+    char_bag: Player.Component(.char_bag),
+    level: *Level,
 ) !void {
     _ = rx;
+
+    level.reset();
+    try respawnCharTeam(gpa.interface, char_bag.data, &scene.data.current, level);
 
     const position: pb.VECTOR = .{
         .X = scene.data.current.position[0],
@@ -46,13 +106,17 @@ pub fn beginChangingScene(
 
 pub fn refreshCharTeam(
     rx: logic.event.Receiver(.char_bag_team_modified),
+    gpa: logic.Resource.Allocator(.gpa),
     char_bag: Player.Component(.char_bag),
+    scene: Player.Component(.scene),
+    level: *Level,
     sync_tx: logic.event.Sender(.sync_self_scene),
 ) !void {
     switch (rx.payload.modification) {
         .set_leader => return, // Doesn't require any action from server.
         .set_char_team => if (rx.payload.team_index == char_bag.data.meta.curr_team_index) {
             // If the current active team has been modified, it has to be re-spawned.
+            try respawnCharTeam(gpa.interface, char_bag.data, &scene.data.current, level);
             try sync_tx.send(.{ .reason = .team_modified });
         },
     }
@@ -64,17 +128,12 @@ pub fn syncSelfScene(
     arena: logic.Resource.Allocator(.arena),
     char_bag: Player.Component(.char_bag),
     scene: Player.Component(.scene),
+    level: *Level,
     assets: *const Assets,
 ) !void {
     const reason: pb.SELF_INFO_REASON_TYPE = switch (rx.payload.reason) {
         .entrance => .SLR_ENTER_SCENE,
         .team_modified => .SLR_CHANGE_TEAM,
-    };
-
-    const position: pb.VECTOR = .{
-        .X = scene.data.current.position[0],
-        .Y = scene.data.current.position[1],
-        .Z = scene.data.current.position[2],
     };
 
     const team_index = char_bag.data.meta.curr_team_index;
@@ -93,46 +152,51 @@ pub fn syncSelfScene(
         .detail = .{},
     };
 
-    for (char_bag.data.teams.items(.char_team)[team_index]) |slot| {
-        const char_index = slot.charIndex() orelse continue;
-        const char_template_id_num = char_bag.data.chars.items(.template_id)[@intFromEnum(char_index)];
-        const char_template_id = assets.numToStr(.char_id, char_template_id_num).?;
-        const char_data = assets.table(.character).getPtr(char_template_id).?;
+    const objects = level.objects.slice();
+    for (0..objects.len) |i| {
+        const position = objects.items(.position)[i];
+        const rotation = objects.items(.rotation)[i];
+        const net_id = @intFromEnum(objects.items(.net_id)[i]);
 
-        var scene_char: pb.SCENE_CHARACTER = .{
-            .level = 1,
-            .battle_info = .{
-                .msg_generation = @intCast(char_index.objectId()),
-                .battle_inst_id = @intCast(char_index.objectId()),
-                .part_inst_info = .{},
-            },
-            .common_info = .{
-                .id = char_index.objectId(),
-                .templateid = char_template_id,
-                .position = position,
-                .rotation = .{},
-                .scene_num_id = scene.data.current.level_id,
-            },
+        var common_info: pb.SCENE_OBJECT_COMMON_INFO = .{
+            .id = net_id,
+            .position = .{ .X = position.x, .Y = position.y, .Z = position.z },
+            .rotation = .{ .X = rotation.x, .Y = rotation.y, .Z = rotation.z },
+            .scene_num_id = scene.data.current.level_id,
+            .hp = objects.items(.hp)[i],
         };
 
-        for (char_data.attributes[0].Attribute.attrs) |attr| {
-            if (attr.attrType == .max_hp)
-                scene_char.common_info.?.hp = attr.attrValue;
+        switch (objects.items(.extra)[i]) {
+            .character => |extra| {
+                const template_id_num = objects.items(.template_id)[i];
+                const template_id = assets.numToStr(.char_id, template_id_num).?;
 
-            try scene_char.attrs.append(arena.interface, .{
-                .attr_type = @intFromEnum(attr.attrType),
-                .basic_value = attr.attrValue,
-                .value = attr.attrValue,
-            });
+                common_info.type = 0;
+                common_info.templateid = template_id;
+
+                var scene_char: pb.SCENE_CHARACTER = .{
+                    .level = extra.level,
+                    .common_info = common_info,
+                    .battle_info = .{
+                        .msg_generation = @intCast(net_id),
+                        .battle_inst_id = @intCast(net_id),
+                        .part_inst_info = .init,
+                        .skill_list = try packCharacterSkills(arena.interface, assets, template_id),
+                    },
+                };
+
+                const char_data = assets.table(.character).getPtr(template_id).?;
+                for (char_data.attributes[0].Attribute.attrs) |attr| {
+                    try scene_char.attrs.append(arena.interface, .{
+                        .attr_type = @intFromEnum(attr.attrType),
+                        .basic_value = attr.attrValue,
+                        .value = attr.attrValue,
+                    });
+                }
+
+                try self_scene_info.detail.?.char_list.append(arena.interface, scene_char);
+            },
         }
-
-        scene_char.battle_info.?.skill_list = try packCharacterSkills(
-            arena.interface,
-            assets,
-            char_template_id,
-        );
-
-        try self_scene_info.detail.?.char_list.append(arena.interface, scene_char);
     }
 
     try session.send(self_scene_info);

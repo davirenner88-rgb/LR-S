@@ -19,16 +19,15 @@ player_id: PlayerId,
 session: *Session, // TODO: should it be here this way? Do we need an abstraction?
 res: logic.Resource,
 player: logic.Player,
+level: logic.Level = .init,
 
 pub fn init(
     session: *Session,
     assets: *const Assets,
     uid: mem.LimitedString(PlayerId.max_length),
     player: logic.Player,
-    gpa: Allocator,
     io: Io,
 ) World {
-    _ = gpa;
     return .{
         .player_id = .{ .uid = uid },
         .session = session,
@@ -39,6 +38,7 @@ pub fn init(
 
 pub fn deinit(world: *World, gpa: Allocator) void {
     world.player.deinit(gpa);
+    world.level.deinit(gpa);
 }
 
 pub const GetComponentError = error{
@@ -49,6 +49,7 @@ pub fn getComponentByType(world: *World, comptime T: type) GetComponentError!T {
     switch (T) {
         PlayerId => return world.player_id,
         *Session => return world.session,
+        *logic.Level => return &world.level,
         *logic.Resource.PingTimer => return &world.res.ping_timer,
         *const Assets => return world.res.assets,
         Io => return world.res.io(),
