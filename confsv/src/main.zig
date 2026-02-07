@@ -60,15 +60,13 @@ fn start(init: Init.Minimal, io: Io, gpa: Allocator) u8 {
     defer log.info("shutting down...", .{});
 
     accept_loop: while (true) {
-        const stream = server.accept(io) catch |err| switch (err) {
+        const stream = server.accept(io) catch |accept_err| switch (accept_err) {
             error.Canceled => break, // Shutdown requested
             error.ProcessFdQuotaExceeded, error.SystemFdQuotaExceeded, error.SystemResources => {
                 // System is overloaded. Stop accepting new connections for now.
-                while (true) {
-                    if (io.sleep(.fromSeconds(1), preferred_clock)) break else |sleep_err| switch (sleep_err) {
-                        error.Canceled => break :accept_loop, // Shutdown requested
-                    }
-                }
+                io.sleep(.fromSeconds(1), preferred_clock) catch |err| switch (err) {
+                    error.Canceled => break :accept_loop, // Shutdown requested
+                };
 
                 continue;
             },
