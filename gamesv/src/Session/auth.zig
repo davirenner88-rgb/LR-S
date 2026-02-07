@@ -39,7 +39,7 @@ pub fn processLoginRequest(io: Io, session: *Session, request: *const pb.CS_LOGI
 
     try session.send(pb.SC_LOGIN{
         .uid = request.uid,
-        .server_time = @intCast((Io.Clock.real.now(io) catch Io.Timestamp.zero).toSeconds()),
+        .server_time = @intCast(Io.Clock.real.now(io).toSeconds()),
         .server_time_zone = 3,
     });
 

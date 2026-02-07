@@ -20,6 +20,11 @@ const native_arch = builtin.cpu.arch;
 
 const iovlen_t = @FieldType(posix.msghdr_const, "iovlen");
 
+extern "kernel32" fn SetConsoleCtrlHandler(
+    HandlerRoutine: ?windows.HANDLER_ROUTINE,
+    Add: windows.BOOL,
+) callconv(.winapi) windows.BOOL;
+
 pub const IoOptions = struct {
     stack_size: usize = 1024 * 1024, // 1MB
     max_iovecs_len: usize = 8,
@@ -298,7 +303,7 @@ pub fn Poll(comptime io_options: IoOptions) type {
                 pub fn remainingTimeNanoseconds(sleeper: *const Sleeper) ?i96 {
                     const until = sleeper.until orelse return null;
 
-                    const ts = currentTime(until.clock) catch unreachable;
+                    const ts = currentTime(until.clock);
                     return until.raw.nanoseconds - ts.nanoseconds;
                 }
 
@@ -1200,16 +1205,17 @@ pub fn Poll(comptime io_options: IoOptions) type {
             group.token.raw = null;
         }
 
-        fn sleep(userdata: ?*anyopaque, timeout: Io.Timeout) Io.SleepError!void {
+        fn sleep(userdata: ?*anyopaque, timeout: Io.Timeout) Io.Cancelable!void {
             if (timeout == .none) return;
             const p: *ThisPoll = @ptrCast(@alignCast(userdata));
 
+            // TODO: eliminate this. EventLoop fiber should be statically allocated.
             p.ensureEventLoop() catch return error.Canceled;
 
             const sleeper = WaitScheduler.Sleeper.create(
                 p.gpa,
                 p.obtainCurrentRestorePoint(),
-                (try timeout.toDeadline(p.io())).?,
+                timeout.toTimestamp(p.io()),
                 null, // futexless wait
             ) catch return error.Canceled;
 
@@ -1219,9 +1225,40 @@ pub fn Poll(comptime io_options: IoOptions) type {
             try checkCancel(p);
         }
 
-        fn now(userdata: ?*anyopaque, clock: Io.Clock) Io.Clock.Error!Io.Timestamp {
+        fn now(userdata: ?*anyopaque, clock: Io.Clock) Io.Timestamp {
             _ = userdata;
             return currentTime(clock);
+        }
+
+        fn clockResolution(userdata: ?*anyopaque, clock: Io.Clock) Io.Clock.ResolutionError!Io.Duration {
+            _ = userdata;
+
+            return switch (native_os) {
+                .windows => switch (clock) {
+                    .awake, .boot, .real => {
+                        var qpf: windows.LARGE_INTEGER = undefined;
+                        if (windows.ntdll.RtlQueryPerformanceFrequency(&qpf) != 0) {
+                            return .zero;
+                        }
+                        const common_qpf = 10_000_000;
+                        if (qpf == common_qpf) return .fromNanoseconds(std.time.ns_per_s / common_qpf);
+
+                        const scale = @as(u64, std.time.ns_per_s << 32) / @as(u32, @intCast(qpf));
+                        const result = scale >> 32;
+                        return .fromNanoseconds(result);
+                    },
+                    .cpu_process, .cpu_thread => return error.ClockUnavailable,
+                },
+                else => {
+                    const clock_id: posix.clockid_t = clockToPosix(clock) orelse return .zero;
+                    var timespec: posix.timespec = undefined;
+                    return switch (posix.errno(posix.system.clock_getres(clock_id, &timespec))) {
+                        .SUCCESS => .fromNanoseconds(timespecToNs(&timespec)),
+                        .INVAL => return error.ClockUnavailable,
+                        else => |err| return posix.unexpectedErrno(err),
+                    };
+                },
+            };
         }
 
         fn checkCancel(userdata: ?*anyopaque) Io.Cancelable!void {
@@ -1363,7 +1400,7 @@ pub fn Poll(comptime io_options: IoOptions) type {
 
             _ = flags;
             if (message_buffer.len == 0) return .{ null, 0 };
-            if (timeout != .none) return .{ error.UnsupportedClock, 0 }; // timeouts are not supported for now.
+            if (timeout != .none) return .{ error.Timeout, 0 }; // timeouts are not supported for now.
 
             const p: *ThisPoll = @ptrCast(@alignCast(userdata));
 
@@ -1561,7 +1598,7 @@ pub fn Poll(comptime io_options: IoOptions) type {
             timeout: Io.Timeout,
         ) Io.Cancelable!void {
             const p: *ThisPoll = @ptrCast(@alignCast(userdata));
-            const wait_until = timeout.toDeadline(p.io()) catch null;
+            const wait_until = timeout.toTimestamp(p.io());
 
             const sleeper = WaitScheduler.Sleeper.create(
                 p.gpa,
@@ -2275,7 +2312,7 @@ pub fn Poll(comptime io_options: IoOptions) type {
         fn setInterruptHandler(waker: Waker) void {
             if (native_os == .windows) {
                 InterruptHandler.waker = waker;
-                windows.SetConsoleCtrlHandler(InterruptHandler.onInterruptWindows, true) catch {};
+                _ = SetConsoleCtrlHandler(InterruptHandler.onInterruptWindows, windows.TRUE);
             } else {
                 posix.sigaction(posix.SIG.INT, &.{
                     .handler = .{ .handler = InterruptHandler.onInterruptPosix },
@@ -2362,7 +2399,7 @@ pub fn Poll(comptime io_options: IoOptions) type {
     };
 }
 
-fn clockToPosix(clock: Io.Clock) Io.Clock.Error!posix.clockid_t {
+fn clockToPosix(clock: Io.Clock) ?posix.clockid_t {
     return switch (clock) {
         .real => posix.CLOCK.REALTIME,
         .awake => switch (native_os) {
@@ -2375,11 +2412,11 @@ fn clockToPosix(clock: Io.Clock) Io.Clock.Error!posix.clockid_t {
             .linux => posix.CLOCK.BOOTTIME,
             else => posix.CLOCK.MONOTONIC,
         },
-        .cpu_thread, .cpu_process => return error.UnsupportedClock,
+        .cpu_thread, .cpu_process => null,
     };
 }
 
-fn currentTime(clock: Io.Clock) Io.Clock.Error!Io.Timestamp {
+fn currentTime(clock: Io.Clock) Io.Timestamp {
     if (native_os == .windows) {
         switch (clock) {
             .real => {
@@ -2396,17 +2433,17 @@ fn currentTime(clock: Io.Clock) Io.Clock.Error!Io.Timestamp {
                 const result = (@as(u96, qpc) * scale) >> 32;
                 return .{ .nanoseconds = @intCast(result) };
             },
-            else => return error.UnsupportedClock,
+            else => return .zero,
         }
     } else { // POSIX
-        const clock_id: posix.clockid_t = try clockToPosix(clock);
+        const clock_id = clockToPosix(clock) orelse return .zero;
         var tp: posix.timespec = undefined;
 
-        switch (posix.errno(posix.system.clock_gettime(clock_id, &tp))) {
-            .SUCCESS => return .{ .nanoseconds = @intCast(@as(i128, tp.sec) * std.time.ns_per_s + tp.nsec) },
-            .INVAL => return error.UnsupportedClock,
-            else => |err| return posix.unexpectedErrno(err),
-        }
+        return switch (posix.errno(posix.system.clock_gettime(clock_id, &tp))) {
+            .SUCCESS => .{ .nanoseconds = @intCast(@as(i128, tp.sec) * std.time.ns_per_s + tp.nsec) },
+            .INVAL => .zero,
+            else => .zero,
+        };
     }
 }
 
@@ -2494,6 +2531,10 @@ fn appendWsaBuf(v: []ws2_32.WSABUF, i: *u32, bytes: []const u8) void {
 
 fn timespecToMs(timespec: posix.timespec) i64 {
     return @intCast((timespec.sec * 1000) + @divFloor(timespec.nsec, std.time.ns_per_ms));
+}
+
+fn timespecToNs(timespec: *const posix.timespec) i96 {
+    return @intCast(@as(i128, timespec.sec) * std.time.ns_per_s + timespec.nsec);
 }
 
 fn initWSA() void {

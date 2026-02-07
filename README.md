@@ -4,7 +4,7 @@
 
 # Getting Started
 ## Requirements
-- Zig 0.16.0-dev.2459: [Linux](https://ziglang.org/builds/zig-x86_64-linux-0.16.0-dev.2459+37d14a4f3.tar.xz)/[Windows](https://ziglang.org/builds/zig-x86_64-windows-0.16.0-dev.2459+37d14a4f3.zip)
+- Zig 0.16.0-dev.2510: [Linux](https://ziglang.org/builds/zig-x86_64-linux-0.16.0-dev.2510+bcb5218a2.tar.xz)/[Windows](https://ziglang.org/builds/zig-x86_64-windows-0.16.0-dev.2510+bcb5218a2.zip)
 
 #### For additional help, you can join our [discord server](https://discord.xeondev.com)
 

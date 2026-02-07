@@ -63,7 +63,7 @@ fn start(init: Init.Minimal, io: Io, gpa: Allocator) u8 {
     var sessions: Io.Group = .init;
     defer sessions.cancel(io);
 
-    var preferred_clock: Io.Clock = .awake;
+    const preferred_clock: Io.Clock = if (Io.Clock.awake.resolution(io)) |_| .awake else |_| .real;
     var concurrency_availability: Session.ConcurrencyAvailability = .undetermined;
 
     log.info("listening at {f}", .{listen_address});
@@ -77,11 +77,6 @@ fn start(init: Init.Minimal, io: Io, gpa: Allocator) u8 {
                 while (true) {
                     if (io.sleep(.fromSeconds(1), preferred_clock)) break else |sleep_err| switch (sleep_err) {
                         error.Canceled => break :accept_loop, // Shutdown requested
-                        error.UnsupportedClock => preferred_clock = if (preferred_clock == .awake)
-                            .real
-                        else
-                            continue :accept_loop, // No clock available.
-                        error.Unexpected => continue :accept_loop, // Sleep is unimportant then.
                     }
                 }
 

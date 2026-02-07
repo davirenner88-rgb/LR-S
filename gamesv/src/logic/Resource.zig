@@ -15,10 +15,7 @@ pub const PingTimer = struct {
     last_client_ts: u64 = 0,
 
     pub fn serverTime(pt: PingTimer) u64 {
-        return if (Io.Clock.real.now(pt.io)) |ts|
-            @intCast(ts.toMilliseconds())
-        else |_|
-            pt.last_client_ts;
+        return @intCast(Io.Clock.real.now(pt.io).toMilliseconds());
     }
 };
 
