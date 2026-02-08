@@ -202,6 +202,83 @@ pub fn syncSelfScene(
     try session.send(self_scene_info);
 }
 
+pub fn refreshVisibleObjects(
+    rx: logic.event.Receiver(.refresh_visible_objects),
+    session: *Session,
+    arena: logic.Resource.Allocator(.arena),
+    scene: Player.Component(.scene),
+    assets: *const Assets,
+) !void {
+    const objects_per_message: usize = 128; // TODO(Session): message fragmentation.
+
+    _ = rx;
+
+    const level_id = scene.data.current.level_id;
+    var container: pb.SCENE_OBJECT_DETAIL_CONTAINER = .init;
+
+    const brief_map = &assets.world_entity_registry.worldEntityBriefInfos;
+    for (brief_map.map.keys(), brief_map.map.values()) |id, info| {
+        if (@divFloor(id, 100_000_000) != level_id)
+            continue;
+
+        if (info.objectType() != .enemy) continue;
+        const template_id = info.detailId orelse continue;
+
+        const enemy_attrs = assets.table(.enemy_attribute_template).getPtr(template_id) orelse continue;
+        const common_info: pb.SCENE_OBJECT_COMMON_INFO = .{
+            .id = id,
+            .type = 3,
+            .templateid = template_id,
+            .position = .{ .X = info.position.x, .Y = info.position.y, .Z = info.position.z },
+            .rotation = .{ .X = info.rotation.x, .Y = info.rotation.y, .Z = info.rotation.z },
+            .scene_num_id = level_id,
+            .hp = 100,
+        };
+
+        var monster: pb.SCENE_MONSTER = .{
+            .common_info = common_info,
+            .level = 1,
+            .battle_info = .{
+                .msg_generation = @truncate(id),
+                .battle_inst_id = @truncate(id),
+                .part_inst_info = .init,
+            },
+        };
+
+        for (enemy_attrs.levelDependentAttributes[0].attrs) |attr| {
+            try monster.attrs.append(arena.interface, .{
+                .attr_type = @intFromEnum(attr.attrType),
+                .basic_value = attr.attrValue,
+                .value = attr.attrValue,
+            });
+        }
+
+        for (enemy_attrs.levelIndependentAttributes.attrs) |attr| {
+            try monster.attrs.append(arena.interface, .{
+                .attr_type = @intFromEnum(attr.attrType),
+                .basic_value = attr.attrValue,
+                .value = attr.attrValue,
+            });
+        }
+
+        try container.monster_list.append(arena.interface, monster);
+
+        if (container.monster_list.items.len == objects_per_message) {
+            try session.send(pb.SC_OBJECT_ENTER_VIEW{
+                .detail = container,
+            });
+
+            container = .init;
+        }
+    }
+
+    if (container.monster_list.items.len != 0) {
+        try session.send(pb.SC_OBJECT_ENTER_VIEW{
+            .detail = container,
+        });
+    }
+}
+
 fn packCharacterSkills(
     arena: Allocator,
     assets: *const Assets,

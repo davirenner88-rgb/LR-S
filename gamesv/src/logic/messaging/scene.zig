@@ -9,8 +9,10 @@ const Player = logic.Player;
 pub fn onSceneLoadFinish(
     _: messaging.Request(pb.CS_SCENE_LOAD_FINISH),
     sync_self_scene_tx: logic.event.Sender(.sync_self_scene),
+    refresh_visible_objects_tx: logic.event.Sender(.refresh_visible_objects),
 ) !void {
     try sync_self_scene_tx.send(.{ .reason = .entrance });
+    try refresh_visible_objects_tx.send(.{});
 }
 
 pub fn onMoveObjectMove(

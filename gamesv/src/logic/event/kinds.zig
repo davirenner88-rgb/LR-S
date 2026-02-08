@@ -18,3 +18,5 @@ pub const SyncSelfScene = struct {
         team_modified,
     },
 };
+
+pub const RefreshVisibleObjects = struct {};
